@@ -76,28 +76,36 @@ func (b *gloasBuilder) BuildState() (*spec.VersionedBeaconState, error) {
 		return nil, fmt.Errorf("failed to compute empty execution requests root: %w", err)
 	}
 
-	// This bid MUST stay identical to LatestExecutionPayloadBid in the state below. Do not
-	// zero it to a default body, and do not change one without the other.
+	// Leave this bid exactly as it is, and keep it identical to LatestExecutionPayloadBid in
+	// the state below. Both the shape and the agreement were established the hard way.
 	//
-	// Lighthouse and teku want mutually exclusive things here, measured against
-	// ethpandaops/{lighthouse,teku}:glamsterdam-devnet-8 over five configurations:
+	// Measured against ethpandaops/{lighthouse,teku}:glamsterdam-devnet-8 with identical
+	// configs, varying only these fields:
 	//
-	//   lighthouse accepts iff  body.signed_execution_payload_bid.message == state.latest_execution_payload_bid
-	//                           (it rebuilds the genesis body's bid from the state; the value
-	//                            itself is irrelevant, only that the two agree. Otherwise it
-	//                            dies with "Head block not found in store".)
-	//   teku       accepts iff  body_root == hash_tree_root(default BeaconBlockBody())
-	//                           (AnchorPoint.fromGenesisState vs createEmpty(), which is what
-	//                            initialize_beacon_state_from_eth1 in specs/phase0 mandates and
-	//                            gloas does not override.)
+	//   lighthouse LOADS the state iff this bid equals state.latest_execution_payload_bid
+	//              (otherwise "Head block not found in store" at startup), and additionally
+	//              only PRODUCES BLOCKS when parent_block_hash carries the execution genesis
+	//              hash — it reads the execution head from there. Zero it and lighthouse
+	//              sends forkchoiceUpdated with headBlockHash = 0x000…0 every slot, geth
+	//              answers Invalid with no payload id, and the chain sits at genesis while
+	//              every service looks RUNNING and every slot logs "empty".
+	//   teku       LOADS the state iff body_root == hash_tree_root(default BeaconBlockBody()),
+	//              i.e. this bid must be all-zero (AnchorPoint.fromGenesisState compares
+	//              against createEmpty()). That is what initialize_beacon_state_from_eth1 in
+	//              specs/phase0 mandates, and gloas does not override it.
 	//
-	// Those coincide only if the state's bid were all-zero, and it cannot be — it carries the
-	// execution genesis block hash. So no single genesis.ssz satisfies both clients, teku is
-	// the one following the spec, and we target lighthouse.
+	// So no single genesis.ssz satisfies both clients: teku wants an empty bid, lighthouse
+	// wants a populated one. Teku follows the spec; we run lighthouse.
 	//
-	// Nobody has hit this because no network starts IN gloas (glamsterdam-devnet-8 ships
-	// GLOAS_FORK_EPOCH: 1536); they all transition into it, leaving this builder unexercised.
-	// EIP-8297 forces the issue: a binary tree needs Amsterdam at genesis, hence gloas at slot 0.
+	// upgrade_to_gloas (specs/gloas/fork.md) sets block_hash and gas_limit instead, which
+	// looks more correct and does not work — it leaves parent_block_hash zero and hits the
+	// stall above. Both readings are coherent: in ePBS the latest bid describes the NEXT
+	// payload, whose parent is genesis, while upgrade_to_gloas describes the LAST block.
+	//
+	// Nobody has hit any of this because no network starts IN gloas (glamsterdam-devnet-8
+	// ships GLOAS_FORK_EPOCH: 1536); they all transition into it, leaving this builder
+	// unexercised. EIP-8297 forces the issue: a binary tree needs Amsterdam at genesis,
+	// hence gloas at slot 0.
 	genesisBlockBody := &gloas.BeaconBlockBody{
 		ETH1Data: &phase0.ETH1Data{
 			BlockHash: make([]byte, 32),
@@ -107,8 +115,7 @@ func (b *gloasBuilder) BuildState() (*spec.VersionedBeaconState, error) {
 		},
 		SignedExecutionPayloadBid: &gloas.SignedExecutionPayloadBid{
 			Message: &gloas.ExecutionPayloadBid{
-				BlockHash:             phase0.Hash32(genesisBlockHash),
-				GasLimit:              genesisBlock.GasLimit(),
+				ParentBlockHash:       phase0.Hash32(genesisBlockHash),
 				ExecutionRequestsRoot: executionRequestsRoot,
 			},
 			Signature: phase0.BLSSignature(make([]byte, 96)),
@@ -191,9 +198,19 @@ func (b *gloasBuilder) BuildState() (*spec.VersionedBeaconState, error) {
 		NextSyncCommittee:           syncCommittee,
 		ProposerLookahead:           proposers,
 		Builders:                    clBuilders,
+		// ParentBlockHash, not BlockHash, and this is load-bearing: lighthouse takes the
+		// execution head from parent_block_hash here. Following upgrade_to_gloas
+		// (specs/gloas/fork.md), which sets block_hash and gas_limit, leaves
+		// parent_block_hash zero — and lighthouse then sends forkchoiceUpdated with
+		// headBlockHash = 0x000…0 every slot. Geth answers Invalid with no payload id, no
+		// block is ever built, and the chain sits at genesis looking healthy: every client
+		// RUNNING, CLs peered and advancing slots, every slot "empty".
+		//
+		// Both readings are defensible. In ePBS the latest bid describes the NEXT payload,
+		// whose parent is genesis, so parent_block_hash = genesis is coherent bookkeeping;
+		// upgrade_to_gloas instead describes the LAST block. Only one of them boots.
 		LatestExecutionPayloadBid: &gloas.ExecutionPayloadBid{
-			BlockHash:             phase0.Hash32(genesisBlockHash),
-			GasLimit:              genesisBlock.GasLimit(),
+			ParentBlockHash:       phase0.Hash32(genesisBlockHash),
 			ExecutionRequestsRoot: executionRequestsRoot,
 		},
 		ExecutionPayloadAvailability: beaconutils.MakeAllOnesBitvector(blocksPerHistoricalRoot),
