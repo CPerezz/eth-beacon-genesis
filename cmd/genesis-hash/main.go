@@ -14,8 +14,8 @@ import (
 	"fmt"
 	"os"
 
-	"github.com/ethpandaops/eth-beacon-genesis/eth1"
 	gethversion "github.com/ethereum/go-ethereum/version"
+	"github.com/ethpandaops/eth-beacon-genesis/eth1"
 )
 
 // wantsPBT reports whether the FILE asks for the binary tree, read straight from the

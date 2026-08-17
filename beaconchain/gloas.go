@@ -76,6 +76,28 @@ func (b *gloasBuilder) BuildState() (*spec.VersionedBeaconState, error) {
 		return nil, fmt.Errorf("failed to compute empty execution requests root: %w", err)
 	}
 
+	// This bid MUST stay identical to LatestExecutionPayloadBid in the state below. Do not
+	// zero it to a default body, and do not change one without the other.
+	//
+	// Lighthouse and teku want mutually exclusive things here, measured against
+	// ethpandaops/{lighthouse,teku}:glamsterdam-devnet-8 over five configurations:
+	//
+	//   lighthouse accepts iff  body.signed_execution_payload_bid.message == state.latest_execution_payload_bid
+	//                           (it rebuilds the genesis body's bid from the state; the value
+	//                            itself is irrelevant, only that the two agree. Otherwise it
+	//                            dies with "Head block not found in store".)
+	//   teku       accepts iff  body_root == hash_tree_root(default BeaconBlockBody())
+	//                           (AnchorPoint.fromGenesisState vs createEmpty(), which is what
+	//                            initialize_beacon_state_from_eth1 in specs/phase0 mandates and
+	//                            gloas does not override.)
+	//
+	// Those coincide only if the state's bid were all-zero, and it cannot be — it carries the
+	// execution genesis block hash. So no single genesis.ssz satisfies both clients, teku is
+	// the one following the spec, and we target lighthouse.
+	//
+	// Nobody has hit this because no network starts IN gloas (glamsterdam-devnet-8 ships
+	// GLOAS_FORK_EPOCH: 1536); they all transition into it, leaving this builder unexercised.
+	// EIP-8297 forces the issue: a binary tree needs Amsterdam at genesis, hence gloas at slot 0.
 	genesisBlockBody := &gloas.BeaconBlockBody{
 		ETH1Data: &phase0.ETH1Data{
 			BlockHash: make([]byte, 32),
@@ -85,7 +107,8 @@ func (b *gloasBuilder) BuildState() (*spec.VersionedBeaconState, error) {
 		},
 		SignedExecutionPayloadBid: &gloas.SignedExecutionPayloadBid{
 			Message: &gloas.ExecutionPayloadBid{
-				ParentBlockHash:       phase0.Hash32(genesisBlockHash),
+				BlockHash:             phase0.Hash32(genesisBlockHash),
+				GasLimit:              genesisBlock.GasLimit(),
 				ExecutionRequestsRoot: executionRequestsRoot,
 			},
 			Signature: phase0.BLSSignature(make([]byte, 96)),
@@ -169,7 +192,8 @@ func (b *gloasBuilder) BuildState() (*spec.VersionedBeaconState, error) {
 		ProposerLookahead:           proposers,
 		Builders:                    clBuilders,
 		LatestExecutionPayloadBid: &gloas.ExecutionPayloadBid{
-			ParentBlockHash:       phase0.Hash32(genesisBlockHash),
+			BlockHash:             phase0.Hash32(genesisBlockHash),
+			GasLimit:              genesisBlock.GasLimit(),
 			ExecutionRequestsRoot: executionRequestsRoot,
 		},
 		ExecutionPayloadAvailability: beaconutils.MakeAllOnesBitvector(blocksPerHistoricalRoot),
