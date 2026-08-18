@@ -84,4 +84,4 @@ require (
 // The EIP-8297 binary tree lives entirely inside go-ethereum: core.Genesis.ToBlock()
 // dispatches on ChainConfig.PBT, so linking the PBT fork is the whole change needed for
 // this tool to derive a correct binary-tree genesis hash.
-replace github.com/ethereum/go-ethereum => github.com/CPerezz/go-ethereum v0.0.0-20260810122451-a00aab166b6a
+replace github.com/ethereum/go-ethereum => github.com/CPerezz/go-ethereum v0.0.0-20260818102504-bcf30164bf65
